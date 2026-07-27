@@ -84,6 +84,12 @@ use crate::hardware::SingleGpuConfig;
 use crate::vm::lifecycle::{load_pci_passthrough, load_usb_passthrough};
 use crate::vm::DiscoveredVm;
 
+/// CPU flags that hide the hypervisor from the guest (#71). `kvm=off` masks the
+/// KVM CPUID signature and `hv_vendor_id` replaces the Hyper-V vendor string
+/// (the value is arbitrary); the hv_* enlightenments keep Windows responsive.
+const HIDE_KVM_CPU_FLAGS: &str =
+    "host,kvm=off,hv_vendor_id=AuthenticAMD,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time";
+
 /// Generated scripts for single GPU passthrough
 #[derive(Debug)]
 pub struct GeneratedScripts {
@@ -1318,10 +1324,11 @@ fn extract_qemu_command_for_passthrough(
         passthrough_args.push(pci_arg.clone());
     }
 
-    // Add NVIDIA CPU flags if NVIDIA GPU
-    let nvidia_cpu_flags = if config.gpu.is_nvidia() {
-        // These flags help with NVIDIA driver compatibility
-        Some("-cpu host,kvm=off,hv_vendor_id=AuthenticAMD,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time".to_string())
+    // Hide the hypervisor from the guest if configured (#71): NVIDIA drivers
+    // historically refused to run in a VM without this, and modern AMD (RDNA3/4)
+    // Windows drivers black-screen or Code 43 without it too.
+    let hide_kvm_cpu_flags = if config.hide_kvm {
+        Some(format!("-cpu {}", HIDE_KVM_CPU_FLAGS))
     } else {
         None
     };
@@ -1330,8 +1337,8 @@ fn extract_qemu_command_for_passthrough(
     let passthrough_str = passthrough_args.join(" \\\n    ");
     qemu_cmd = append_passthrough_args(&qemu_cmd, &passthrough_str);
 
-    // Replace -cpu host with NVIDIA flags if needed
-    if let Some(flags) = nvidia_cpu_flags {
+    // Replace -cpu host with hypervisor-hiding flags if needed
+    if let Some(flags) = hide_kvm_cpu_flags {
         if RE_CPU_HOST.is_match(&qemu_cmd) {
             qemu_cmd = RE_CPU_HOST.replace(&qemu_cmd, flags.as_str()).to_string();
         }
@@ -1384,9 +1391,9 @@ fn generate_basic_qemu_command(
     let memory = vm.config.memory_mb;
     let cpu_cores = vm.config.cpu_cores;
 
-    // Use NVIDIA CPU flags if NVIDIA GPU
-    let cpu_flags = if config.gpu.is_nvidia() {
-        "host,kvm=off,hv_vendor_id=AuthenticAMD,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time"
+    // Hide the hypervisor from the guest if configured (#71)
+    let cpu_flags = if config.hide_kvm {
+        HIDE_KVM_CPU_FLAGS
     } else {
         "host"
     };
@@ -1675,6 +1682,7 @@ mod tests {
             original_driver: GpuDriver::Amdgpu,
             display_manager: DisplayManager::Gdm,
             gpu_rom,
+            hide_kvm: true,
         }
     }
 
@@ -1695,6 +1703,57 @@ mod tests {
             gpu_passthrough_device(&amd_gpu_config(Some(String::new()))),
             expected
         );
+    }
+
+    /// Issue #71: with hide_kvm on, `-cpu host` in the parsed launch.sh must be
+    /// replaced with the hypervisor-hiding flags — for AMD GPUs too, not just
+    /// NVIDIA (modern AMD Windows drivers also refuse to run in a visible VM).
+    #[test]
+    fn hide_kvm_replaces_cpu_host_for_amd_gpu() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vm = test_vm_with_cpu_host(tmp.path());
+        let script = generate_start_script(&vm, &amd_gpu_config(None)).unwrap();
+
+        assert!(script.contains("kvm=off"), "kvm=off missing:\n{script}");
+        assert!(script.contains("hv_vendor_id="), "hv_vendor_id missing");
+        assert!(
+            !script.contains("-cpu host \\"),
+            "-cpu host left unreplaced"
+        );
+    }
+
+    /// With hide_kvm off, the guest CPU config must be left untouched.
+    #[test]
+    fn hide_kvm_off_leaves_cpu_host_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vm = test_vm_with_cpu_host(tmp.path());
+        let mut config = amd_gpu_config(None);
+        config.hide_kvm = false;
+        let script = generate_start_script(&vm, &config).unwrap();
+
+        assert!(!script.contains("kvm=off"));
+        assert!(!script.contains("hv_vendor_id="));
+        assert!(script.contains("-cpu host"));
+    }
+
+    /// Like test_vm, but the launch.sh sets `-cpu host` so the hide-KVM
+    /// replacement path is exercised.
+    fn test_vm_with_cpu_host(dir: &Path) -> DiscoveredVm {
+        let launch = dir.join("launch.sh");
+        fs::write(
+            &launch,
+            "#!/bin/bash\nqemu-system-x86_64 \\\n    -machine q35,accel=kvm \\\n    -cpu host \\\n    -m 4096 \\\n    -display sdl,gl=on \\\n    -device virtio-net-pci,netdev=net0\n",
+        )
+        .unwrap();
+        DiscoveredVm {
+            id: "test-vm".to_string(),
+            path: dir.to_path_buf(),
+            launch_script: launch,
+            config: Default::default(),
+            custom_name: None,
+            os_profile: None,
+            notes: None,
+        }
     }
 
     /// Build a minimal VM directory with a parseable launch.sh
