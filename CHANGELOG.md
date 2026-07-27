@@ -1,5 +1,11 @@
 # Changelog
 
+**v1.2.3**
+- **Hide-KVM Toggle for Single-GPU Passthrough — AMD Included** (#71, continuing #60): Windows guests on modern AMD cards (reported on an RX 9070 XT) black-screened or hit driver Code 43 even with a vBIOS ROM set, because AMD's RDNA3/4 Windows drivers — like NVIDIA's — misbehave when they detect a hypervisor. The generated single-GPU scripts already hid KVM from the guest (`-cpu host,kvm=off,hv_vendor_id=…` plus Hyper-V enlightenments), but only for NVIDIA GPUs.
+  - The hypervisor-hiding CPU flags are now controlled by a per-VM **Hide KVM** setting: shown in the Single GPU Setup screen, toggled with `[h]`, persisted in `single-gpu-config.toml` alongside the vBIOS ROM, and **on by default for both NVIDIA and AMD** GPUs.
+  - Configs written by earlier versions lack the setting and pick up the vendor default on load; regenerate the scripts with `[g]` to apply it. For AMD *Linux* guests the only cost of the new default is losing KVM paravirt niceties such as kvmclock (the guest still runs KVM-accelerated) — toggle it off if you prefer those.
+- **Fix App Quitting When Typing 'q' in Settings** (#72): Setting a value containing the letter `q` (e.g. a VM Library Path like `~/qemu-vms`) in the Settings editor quit the program mid-keystroke. The global `q`-to-quit handler exempted every screen that accepts free text except the Settings screen's inline edit mode, so it consumed the key before the edit buffer saw it. `q`/`Q` now type normally while editing a value; `q` still quits when just browsing the settings list.
+
 **v1.2.2**
 - **Fix VM Launch Failure in Library Paths Containing Spaces** (#65): VMs created with v1.0.0–v1.2.1 failed to launch when the VM library path contained a space (e.g. `/mnt/Virtual SSD/vm-space`) — QEMU aborted with `-qmp unix:/mnt/Virtual: Failed to connect to '/mnt/Virtual': No such file or directory`. The generated `launch.sh` wrote the QMP monitor socket path unquoted — the only unquoted path interpolation in the script — so the shell word-split the argument at the space. VMs created with v0.4.10 or earlier were unaffected because they predate the QMP socket line.
   - Newly generated scripts quote the socket path (`unix:"$VM_DIR/qemu.sock"`), matching how `$DISK`, `$ISO`, and the other paths are already quoted.

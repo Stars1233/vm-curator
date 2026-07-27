@@ -4,6 +4,10 @@ A fast and friendly Rust TUI for managing desktop QEMU/KVM virtual machines — 
 
 ### Changelog
 
+**v1.2.3**
+- **Hide-KVM Toggle for Single-GPU Passthrough** (#71): The hypervisor-hiding CPU flags (`kvm=off,hv_vendor_id=…`) previously emitted only for NVIDIA are now a per-VM toggle (`[h]` in the Single GPU Setup screen) that defaults **on for AMD too** — fixes Code 43 / black screen in Windows guests on modern AMD cards like the RX 9070 XT; regenerate scripts to apply
+- **Fix App Quitting When Typing 'q' in Settings** (#72): Editing a Settings value containing `q` (e.g. a path like `~/qemu-vms`) no longer quits the app — `q` still quits when just browsing
+
 **v1.2.2**
 - **Fix VM Launch Failure in Library Paths Containing Spaces** (#65): The QMP socket path in generated `launch.sh` scripts is now quoted, so VM libraries like `/mnt/Virtual SSD/vm-space` launch again — scripts broken by v1.0.0–v1.2.1 are repaired automatically on their next launch
 
@@ -91,6 +95,7 @@ A fast and friendly Rust TUI for managing desktop QEMU/KVM virtual machines — 
 
 **GPU Passthrough**
 - **Single-GPU passthrough**: Pass your only GPU to a VM (requires TTY, stops display manager)
+- **Guest driver compatibility**: Per-VM vBIOS ROM (`romfile=`) and Hide-KVM (`kvm=off`) options for AMD/NVIDIA Windows driver quirks
 - **Multi-GPU passthrough**: Pass a secondary GPU while keeping the primary for the host
 - **Looking Glass integration**: Near-zero latency display for multi-GPU setups with auto-launch support
 - **PCI passthrough screen**: Select PCI devices (GPUs, USB controllers, NVMe) for VM passthrough
