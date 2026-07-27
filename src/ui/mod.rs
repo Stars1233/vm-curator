@@ -528,6 +528,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 | Screen::NetworkSettings
                 | Screen::ImportWizard
         )
+        && !(matches!(app.screen, Screen::Settings) && app.settings_editing)
     {
         app.should_quit = true;
         return Ok(());
