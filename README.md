@@ -4,6 +4,13 @@ A fast and friendly Rust TUI for managing desktop QEMU/KVM virtual machines — 
 
 ### Changelog
 
+**v1.3.0**
+- **Configurable VM Window Size** (thanks @HenriqueCrj, #67): New Settings entry sets the initial display resolution for launched VMs (`WIDTHxHEIGHT`, e.g. `1440x900`) — applied at runtime via an environment variable on scripts using standard VGA, virtio-vga, virtio-vga-gl, or QXL video; existing scripts are patched automatically, and hand-customized video setups are left alone
+- **Fix Shared Folders with Spaces in Paths** (thanks @HenriqueCrj, #66): The managed `SHARED_FOLDERS_ARGS` section is now a properly quoted bash array, so host paths containing spaces or quotes no longer break the launch script
+- **Fix USB Passthrough Launch Handling** (#66): Launching from the TUI no longer passes USB QEMU flags as shell options `launch.sh` can't parse — the USB section saved in the script is the single source of truth
+- **Fix UEFI Boot Delays from Stale NVRAM Entries** (#66): Normal UEFI boots now pin the disk first (`-boot strict=on` + virtio `bootindex=0`), so guests that once registered PXE/HTTP boot entries stop waiting on network boot every start
+- **Keep Management Screens Open When Saving Fails** (#66): A failed save from the USB/PCI/Shared Folders unsaved-changes prompt no longer closes the screen and discards your selections
+
 **v1.2.3**
 - **Hide-KVM Toggle for Single-GPU Passthrough** (#71): The hypervisor-hiding CPU flags (`kvm=off,hv_vendor_id=…`) previously emitted only for NVIDIA are now a per-VM toggle (`[h]` in the Single GPU Setup screen) that defaults **on for AMD too** — fixes Code 43 / black screen in Windows guests on modern AMD cards like the RX 9070 XT; regenerate scripts to apply
 - **Fix App Quitting When Typing 'q' in Settings** (#72): Editing a Settings value containing `q` (e.g. a path like `~/qemu-vms`) no longer quits the app — `q` still quits when just browsing
