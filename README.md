@@ -4,6 +4,13 @@ A fast and friendly Rust TUI for managing desktop QEMU/KVM virtual machines — 
 
 ### Changelog
 
+**v1.2.3**
+- **Hide-KVM Toggle for Single-GPU Passthrough** (#71): The hypervisor-hiding CPU flags (`kvm=off,hv_vendor_id=…`) previously emitted only for NVIDIA are now a per-VM toggle (`[h]` in the Single GPU Setup screen) that defaults **on for AMD too** — fixes Code 43 / black screen in Windows guests on modern AMD cards like the RX 9070 XT; regenerate scripts to apply
+- **Fix App Quitting When Typing 'q' in Settings** (#72): Editing a Settings value containing `q` (e.g. a path like `~/qemu-vms`) no longer quits the app — `q` still quits when just browsing
+
+**v1.2.2**
+- **Fix VM Launch Failure in Library Paths Containing Spaces** (#65): The QMP socket path in generated `launch.sh` scripts is now quoted, so VM libraries like `/mnt/Virtual SSD/vm-space` launch again — scripts broken by v1.0.0–v1.2.1 are repaired automatically on their next launch
+
 **v1.2.1**
 - **Raw Disk Image Support** (thanks @HenriqueCrj, #55): Choose qcow2 or raw for new disks in the creation wizard; existing and imported disks keep their detected format (`.raw`/`.img` now listed in the disk browser) and launch scripts emit the matching `format=` instead of hardcoding qcow2
 - **Fix Host Hang / Power-Off in Single-GPU Passthrough on APUs** (#61): The start script now detaches the virtual consoles and EFI framebuffer before unloading the GPU driver, aborts safely (restoring the display) if the driver won't release instead of force-unbinding it, and reattaches the consoles on cleanup/restore — AMD APUs get a prominent best-effort warning
@@ -88,6 +95,7 @@ A fast and friendly Rust TUI for managing desktop QEMU/KVM virtual machines — 
 
 **GPU Passthrough**
 - **Single-GPU passthrough**: Pass your only GPU to a VM (requires TTY, stops display manager)
+- **Guest driver compatibility**: Per-VM vBIOS ROM (`romfile=`) and Hide-KVM (`kvm=off`) options for AMD/NVIDIA Windows driver quirks
 - **Multi-GPU passthrough**: Pass a secondary GPU while keeping the primary for the host
 - **Looking Glass integration**: Near-zero latency display for multi-GPU setups with auto-launch support
 - **PCI passthrough screen**: Select PCI devices (GPUs, USB controllers, NVMe) for VM passthrough

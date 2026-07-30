@@ -19,6 +19,73 @@ fn test_replace_display_for_dbus_strips_spice_agent_channel() {
     assert!(dbus.contains("-display dbus"), "display swapped to dbus");
 }
 
+fn test_vm(vm_dir: &std::path::Path) -> DiscoveredVm {
+    DiscoveredVm {
+        id: "test-vm".to_string(),
+        path: vm_dir.to_path_buf(),
+        launch_script: vm_dir.join("launch.sh"),
+        config: crate::vm::QemuConfig::default(),
+        custom_name: None,
+        os_profile: None,
+        notes: None,
+    }
+}
+
+#[test]
+fn test_save_usb_passthrough_persists_in_launch_script() {
+    let dir = tempfile::tempdir().unwrap();
+    let vm = test_vm(dir.path());
+    std::fs::write(
+        &vm.launch_script,
+        "#!/bin/bash\nqemu-system-x86_64 -m 2048\n",
+    )
+    .unwrap();
+    let devices = vec![UsbPassthrough {
+        vendor_id: 0x413c,
+        product_id: 0x2113,
+        usb_version: crate::hardware::UsbVersion::Usb2,
+    }];
+
+    save_usb_passthrough(&vm, &devices).unwrap();
+
+    let script = std::fs::read_to_string(&vm.launch_script).unwrap();
+    assert!(script.contains(USB_MARKER_START));
+    assert!(script.contains("USB_PASSTHROUGH_ARGS=\"-usb"));
+    assert!(script.contains("vendorid=0x413c,productid=0x2113"));
+    assert!(script.contains("qemu-system-x86_64 -m 2048 $USB_PASSTHROUGH_ARGS"));
+
+    let loaded = load_usb_passthrough(&vm);
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].vendor_id, 0x413c);
+    assert_eq!(loaded[0].product_id, 0x2113);
+}
+
+#[test]
+fn test_save_usb_passthrough_persists_usb3_controller() {
+    let dir = tempfile::tempdir().unwrap();
+    let vm = test_vm(dir.path());
+    std::fs::write(
+        &vm.launch_script,
+        "#!/bin/bash\nqemu-system-x86_64 -m 2048\n",
+    )
+    .unwrap();
+    let devices = vec![UsbPassthrough {
+        vendor_id: 0x413c,
+        product_id: 0x2113,
+        usb_version: crate::hardware::UsbVersion::Usb3,
+    }];
+
+    save_usb_passthrough(&vm, &devices).unwrap();
+
+    let script = std::fs::read_to_string(&vm.launch_script).unwrap();
+    assert!(script.contains("-device qemu-xhci,id=xhci,p2=8,p3=8"));
+    assert!(script.contains("usb-host,bus=xhci.0,vendorid=0x413c,productid=0x2113"));
+    assert_eq!(
+        load_usb_passthrough(&vm)[0].usb_version,
+        crate::hardware::UsbVersion::Usb3
+    );
+}
+
 #[test]
 fn test_window_size_parse_accepts_common_format() {
     assert_eq!(
@@ -42,18 +109,6 @@ fn test_window_size_parse_rejects_invalid_values() {
     assert_eq!(WindowSize::parse("1440"), None);
     assert_eq!(WindowSize::parse("1440x"), None);
     assert_eq!(WindowSize::parse("100x100"), None);
-}
-
-fn test_vm(vm_dir: &std::path::Path) -> DiscoveredVm {
-    DiscoveredVm {
-        id: "test-vm".to_string(),
-        path: vm_dir.to_path_buf(),
-        launch_script: vm_dir.join("launch.sh"),
-        config: crate::vm::QemuConfig::default(),
-        custom_name: None,
-        os_profile: None,
-        notes: None,
-    }
 }
 
 #[test]
@@ -329,6 +384,7 @@ fn test_generate_shared_folders_section_single() {
     let section = generate_shared_folders_section(&folders, "virtio-9p-pci");
     assert!(section.contains(SHARED_FOLDERS_MARKER_START));
     assert!(section.contains(SHARED_FOLDERS_MARKER_END));
+    assert!(section.contains("SHARED_FOLDERS_ARGS=("));
     assert!(section.contains("path=/home/user/Documents"));
     assert!(section.contains("mount_tag=host_documents"));
     assert!(section.contains("virtio-9p-pci"));
@@ -372,7 +428,8 @@ fn test_generate_shared_folders_section_path_with_spaces() {
         mount_tag: "host_my_documents".to_string(),
     }];
     let section = generate_shared_folders_section(&folders, "virtio-9p-pci");
-    assert!(section.contains("'/home/user/My Documents'"));
+    assert!(section.contains("path=/home/user/My Documents"));
+    assert!(section.contains("SHARED_FOLDERS_ARGS=("));
 }
 
 #[test]
@@ -391,6 +448,30 @@ fn test_parse_shared_folders_section() {
 fn test_parse_shared_folders_section_quoted_path() {
     let content = format!(
         "{}\nSHARED_FOLDERS_ARGS=\"-fsdev local,id=fsdev0,path='/home/user/My Documents',security_model=mapped-xattr -device virtio-9p-pci,fsdev=fsdev0,mount_tag=host_my_documents\"\n{}\n",
+        SHARED_FOLDERS_MARKER_START, SHARED_FOLDERS_MARKER_END
+    );
+    let folders = parse_shared_folders_section(&content);
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].host_path, "/home/user/My Documents");
+    assert_eq!(folders[0].mount_tag, "host_my_documents");
+}
+
+#[test]
+fn test_parse_shared_folders_section_array() {
+    let content = format!(
+        "{}\nSHARED_FOLDERS_ARGS=(\n    -fsdev\n    'local,id=fsdev0,path=/home/user/My Documents,security_model=mapped-xattr'\n    -device\n    'virtio-9p-pci,fsdev=fsdev0,mount_tag=host_my_documents'\n)\n{}\n",
+        SHARED_FOLDERS_MARKER_START, SHARED_FOLDERS_MARKER_END
+    );
+    let folders = parse_shared_folders_section(&content);
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].host_path, "/home/user/My Documents");
+    assert_eq!(folders[0].mount_tag, "host_my_documents");
+}
+
+#[test]
+fn test_parse_shared_folders_section_array_closes_on_final_arg_line() {
+    let content = format!(
+        "{}\nSHARED_FOLDERS_ARGS=(\n    -fsdev\n    'local,id=fsdev0,path=/home/user/My Documents,security_model=mapped-xattr'\n    -device\n    'virtio-9p-pci,fsdev=fsdev0,mount_tag=host_my_documents' )\n{}\nqemu-system-x86_64 \"${{SHARED_FOLDERS_ARGS[@]}}\"\n",
         SHARED_FOLDERS_MARKER_START, SHARED_FOLDERS_MARKER_END
     );
     let folders = parse_shared_folders_section(&content);
@@ -425,10 +506,14 @@ fn test_remove_shared_folders_section() {
 #[test]
 fn test_insert_shared_folders_section_simple() {
     let content = "#!/bin/bash\nqemu-system-x86_64 -m 2048\n";
-    let section = "# >>> Shared Folders (managed by vm-curator) >>>\nSHARED_FOLDERS_ARGS=\"-fsdev local,id=fsdev0,path=/tmp,security_model=mapped-xattr -device virtio-9p-pci,fsdev=fsdev0,mount_tag=host_tmp\"\n# <<< Shared Folders <<<\n";
-    let result = insert_shared_folders_section(content, section);
+    let folders = vec![SharedFolder {
+        host_path: "/tmp".to_string(),
+        mount_tag: "host_tmp".to_string(),
+    }];
+    let section = generate_shared_folders_section(&folders, "virtio-9p-pci");
+    let result = insert_shared_folders_section(content, &section);
     assert!(result.contains(SHARED_FOLDERS_MARKER_START));
-    assert!(result.contains("$SHARED_FOLDERS_ARGS"));
+    assert!(result.contains(SHARED_FOLDERS_ARGS_REF));
     // Section should appear before QEMU command
     let marker_pos = result.find(SHARED_FOLDERS_MARKER_START).unwrap();
     let qemu_pos = result.find("qemu-system-x86_64").unwrap();
@@ -453,13 +538,54 @@ fn test_insert_section_before_case_statement() {
         case_pos
     );
 
-    // Both QEMU commands should have $SHARED_FOLDERS_ARGS appended
-    let count = result.matches("$SHARED_FOLDERS_ARGS").count();
+    // Both QEMU commands should have the shared-folder array expansion appended.
+    let count = result.matches(SHARED_FOLDERS_ARGS_REF).count();
     assert_eq!(
         count, 2,
         "Expected 2 appended refs (one per QEMU command), got {}",
         count
     );
+}
+
+#[test]
+fn test_save_shared_folders_preserves_uefi_disk_boot_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let vm = test_vm(dir.path());
+    std::fs::write(
+        &vm.launch_script,
+        r#"#!/bin/bash
+VM_DIR="$(dirname "$(readlink -f "$0")")"
+DISK="$VM_DIR/linux.raw"
+OVMF_VARS="$VM_DIR/OVMF_VARS.fd"
+case "$1" in
+    "")
+        qemu-system-x86_64 \
+        -drive if=pflash,format=raw,file="$OVMF_VARS" \
+        -global virtio-blk-pci.bootindex=0 \
+        -drive file="$DISK",format=raw,if=virtio,index=0,media=disk \
+        -boot strict=on \
+        -qmp \
+        unix:$VM_DIR/qemu.sock,server=on,wait=off
+        ;;
+esac
+"#,
+    )
+    .unwrap();
+    let folders = vec![SharedFolder {
+        host_path: "/home/user/shared".to_string(),
+        mount_tag: "host_shared".to_string(),
+    }];
+
+    save_shared_folders(&vm, &folders).unwrap();
+
+    let script = std::fs::read_to_string(&vm.launch_script).unwrap();
+    assert_eq!(
+        script.matches("-global virtio-blk-pci.bootindex=0").count(),
+        1
+    );
+    assert_eq!(script.matches("-boot strict=on").count(), 1);
+    assert!(script.contains("-drive file=\"$DISK\",format=raw,if=virtio,index=0,media=disk"));
+    assert!(script.contains("\"${SHARED_FOLDERS_ARGS[@]}\""));
 }
 
 #[test]
@@ -481,6 +607,50 @@ fn test_roundtrip_shared_folders() {
     assert_eq!(parsed[0].mount_tag, "host_documents");
     assert_eq!(parsed[1].host_path, "/home/user/My Pictures");
     assert_eq!(parsed[1].mount_tag, "host_my_pictures");
+}
+
+#[test]
+fn test_shared_folders_array_survives_shell_expansion() {
+    let folders = vec![SharedFolder {
+        host_path: "/home/user/O'Brien Documents".to_string(),
+        mount_tag: "host_obrien_documents".to_string(),
+    }];
+    let section = generate_shared_folders_section(&folders, "virtio-9p-pci");
+    let script = format!(
+        "{}\nset -- qemu-system-x86_64 {}\nprintf '%s\\0' \"$@\"\n",
+        section, SHARED_FOLDERS_ARGS_REF
+    );
+
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(script)
+        .output()
+        .expect("bash should run shared-folder expansion test");
+
+    assert!(
+        output.status.success(),
+        "bash failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let args: Vec<String> = output
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8(part.to_vec()).unwrap())
+        .collect();
+
+    assert_eq!(
+        args,
+        vec![
+            "qemu-system-x86_64".to_string(),
+            "-fsdev".to_string(),
+            "local,id=fsdev0,path=/home/user/O'Brien Documents,security_model=mapped-xattr"
+                .to_string(),
+            "-device".to_string(),
+            "virtio-9p-pci,fsdev=fsdev0,mount_tag=host_obrien_documents".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -596,4 +766,69 @@ fn test_parse_pci_section_with_vfio_bind_functions() {
         "-device vfio-pci,host=0000:10:00.0,multifunction=on"
     );
     assert_eq!(args[1], "-device vfio-pci,host=0000:10:00.1");
+}
+
+#[test]
+fn test_ensure_qmp_repairs_unquoted_socket_path() {
+    // Scripts generated by v1.0.0–v1.2.1 carry an unquoted socket path that
+    // word-splits when the VM library path contains spaces (issue #65).
+    let tmp = tempfile::tempdir().unwrap();
+    let script = "#!/bin/bash\n\
+        qemu-system-x86_64 \\\n\
+        -m 2048 \\\n\
+        -qmp \\\n\
+        unix:$VM_DIR/qemu.sock,server=on,wait=off\n\
+        ;;\n";
+    std::fs::write(tmp.path().join("launch.sh"), script).unwrap();
+
+    ensure_qmp_in_script(tmp.path()).unwrap();
+
+    let repaired = std::fs::read_to_string(tmp.path().join("launch.sh")).unwrap();
+    assert!(
+        repaired.contains("unix:\"$VM_DIR/qemu.sock\",server=on,wait=off"),
+        "socket path should be quoted:\n{repaired}"
+    );
+    assert!(!repaired.contains("unix:$VM_DIR/qemu.sock,"));
+}
+
+#[test]
+fn test_ensure_qmp_repair_is_idempotent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = "#!/bin/bash\n\
+        qemu-system-x86_64 \\\n\
+        -qmp unix:$VM_DIR/qemu.sock,server=on,wait=off\n";
+    std::fs::write(tmp.path().join("launch.sh"), script).unwrap();
+
+    ensure_qmp_in_script(tmp.path()).unwrap();
+    let first = std::fs::read_to_string(tmp.path().join("launch.sh")).unwrap();
+    ensure_qmp_in_script(tmp.path()).unwrap();
+    let second = std::fs::read_to_string(tmp.path().join("launch.sh")).unwrap();
+
+    assert_eq!(first, second, "second repair pass must be a no-op");
+    assert!(first.contains("unix:\"$VM_DIR/qemu.sock\""));
+    assert!(!first.contains("unix:\"\"$VM_DIR"), "must not double-quote");
+}
+
+#[test]
+fn test_ensure_qmp_retrofit_inserts_quoted_arg() {
+    // A pre-1.0 script with no QMP line at all gets the arg patched in,
+    // and the patched-in form must be the quoted one.
+    let tmp = tempfile::tempdir().unwrap();
+    let script = "#!/bin/bash\n\
+case \"$1\" in\n\
+    *)\n\
+        qemu-system-x86_64 \\\n\
+        -m 2048 \\\n\
+        -display gtk\n\
+        ;;\n\
+esac\n";
+    std::fs::write(tmp.path().join("launch.sh"), script).unwrap();
+
+    ensure_qmp_in_script(tmp.path()).unwrap();
+
+    let patched = std::fs::read_to_string(tmp.path().join("launch.sh")).unwrap();
+    assert!(
+        patched.contains("-qmp unix:\"$VM_DIR/qemu.sock\",server=on,wait=off"),
+        "retrofitted QMP arg should be quoted:\n{patched}"
+    );
 }
