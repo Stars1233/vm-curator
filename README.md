@@ -203,6 +203,14 @@ paru -S vm-curator
 yay -S vm-curator
 ```
 
+**Homebrew (Linux, incl. atomic distros like Bluefin/Silverblue)**
+
+```bash
+brew install mroboff/tap/vm-curator
+```
+
+Installs the prebuilt x86_64 binary from [the tap](https://github.com/mroboff/homebrew-tap); QEMU itself is not bundled (see `brew info vm-curator`).
+
 **crates.io**
 
 ```bash
