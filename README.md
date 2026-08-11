@@ -123,6 +123,7 @@ A fast and friendly Rust TUI for managing desktop QEMU/KVM virtual machines — 
 - Port forwarding with presets for common services (SSH, RDP, HTTP, HTTPS, VNC)
 - Bridge networking with automatic bridge detection, status checklist, and setup guidance
 - Configurable network adapter models per VM
+- **Virtual Network Manager** (`n` on the main menu): create, edit, start/stop, and delete managed NAT or Isolated (host-only) networks with configurable subnets and built-in DHCP — ideal for multi-VM lab topologies. Host changes run via inspectable generated `net-up.sh`/`net-down.sh` scripts with explicit sudo
 
 **Shared Folders**
 - Share host directories with VMs using virtio-9p

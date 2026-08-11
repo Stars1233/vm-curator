@@ -13,6 +13,7 @@ mod hardware;
 mod metadata;
 mod ui;
 mod vm;
+mod vnet;
 mod wizard_types;
 
 use anyhow::{Context, Result};

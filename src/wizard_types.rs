@@ -556,6 +556,54 @@ impl CreateWizardState {
     }
 }
 
+/// Create/edit form state for the Virtual Network Manager screen
+#[derive(Debug, Clone)]
+pub struct VNetEditorState {
+    /// Some(name) when editing an existing network (name is then read-only);
+    /// None when creating a new one.
+    pub original_name: Option<String>,
+    pub name: String,
+    pub kind: crate::vnet::VNetKind,
+    pub subnet: String,
+    pub dhcp: bool,
+    /// 0 = name, 1 = type, 2 = subnet, 3 = DHCP toggle
+    pub field_focus: usize,
+    /// True while a text field is being edited
+    pub editing: bool,
+    pub edit_buffer: String,
+    pub error: Option<String>,
+}
+
+impl VNetEditorState {
+    pub fn new_network() -> Self {
+        Self {
+            original_name: None,
+            name: String::new(),
+            kind: crate::vnet::VNetKind::Nat,
+            subnet: "192.168.150.0/24".to_string(),
+            dhcp: true,
+            field_focus: 0,
+            editing: false,
+            edit_buffer: String::new(),
+            error: None,
+        }
+    }
+
+    pub fn edit(net: &crate::vnet::VirtualNetwork) -> Self {
+        Self {
+            original_name: Some(net.name.clone()),
+            name: net.name.clone(),
+            kind: net.kind,
+            subnet: net.subnet.clone(),
+            dhcp: net.dhcp,
+            field_focus: 1,
+            editing: false,
+            edit_buffer: String::new(),
+            error: None,
+        }
+    }
+}
+
 /// State for network settings editing screen
 #[derive(Debug, Clone)]
 pub struct NetworkSettingsState {

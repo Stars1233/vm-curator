@@ -92,6 +92,8 @@ pub enum Screen {
     PhysicalDiskPicker,
     /// Passthrough disks management for an existing VM
     DiskPassthrough,
+    /// Virtual Network Manager (managed NAT/Isolated networks, issue #53)
+    NetworkManager,
 }
 
 /// Context for text input dialogs
@@ -117,6 +119,8 @@ pub enum ConfirmAction {
     UnsavedChanges(UnsavedKind),
     /// Confirm passing a physical disk through to the guest (destructive).
     UsePhysicalDisk,
+    /// Delete the selected managed virtual network (definition + scripts).
+    DeleteNetwork,
 }
 
 /// Who opened the physical disk picker (determines where the selection goes)
@@ -215,6 +219,12 @@ pub struct App {
     pub disk_passthrough_baseline: Vec<crate::vm::DiskPassthrough>,
     /// Selected row in the Passthrough Disks screen
     pub disk_passthrough_selected: usize,
+    /// Managed virtual networks (Networks screen)
+    pub vnet_networks: Vec<crate::vnet::VirtualNetwork>,
+    /// Selected row in the Networks screen
+    pub vnet_selected: usize,
+    /// Create/edit form state for the Networks screen
+    pub vnet_editor: Option<VNetEditorState>,
     /// Physical block devices (cached for the disk picker)
     pub block_devices: Vec<crate::hardware::BlockDevice>,
     /// Selected row in the physical disk picker
@@ -450,6 +460,9 @@ impl App {
             selected_snapshot: 0,
             usb_devices: Vec::new(),
             selected_usb_devices: Vec::new(),
+            vnet_networks: Vec::new(),
+            vnet_selected: 0,
+            vnet_editor: None,
             block_devices: Vec::new(),
             block_device_selected: 0,
             disk_picker_context: DiskPickerContext::default(),
@@ -705,6 +718,22 @@ impl App {
         self.usb_devices = crate::hardware::enumerate_usb_devices()?;
         self.selected_usb_devices.clear();
         Ok(())
+    }
+
+    /// Load managed networks and open the Networks screen
+    pub fn open_network_manager(&mut self) {
+        self.reload_vnet_networks();
+        self.vnet_selected = 0;
+        self.vnet_editor = None;
+        self.push_screen(Screen::NetworkManager);
+    }
+
+    /// Re-read managed network definitions from disk
+    pub fn reload_vnet_networks(&mut self) {
+        self.vnet_networks = crate::vnet::load_networks(&crate::vnet::networks_dir());
+        if self.vnet_selected >= self.vnet_networks.len() {
+            self.vnet_selected = self.vnet_networks.len().saturating_sub(1);
+        }
     }
 
     /// Enumerate physical disks and open the picker screen

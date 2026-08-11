@@ -6,6 +6,7 @@ pub mod import_wizard;
 pub mod main_menu;
 pub mod management;
 pub mod multi_gpu_setup;
+pub mod network_manager;
 pub mod network_settings;
 pub mod pci_passthrough;
 pub mod physical_disk_picker;

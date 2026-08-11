@@ -216,6 +216,10 @@ fn execute_confirm_action(app: &mut App, action: ConfirmAction) -> Result<()> {
         ConfirmAction::UsePhysicalDisk => {
             app.pop_screen();
         }
+        ConfirmAction::DeleteNetwork => {
+            app.pop_screen();
+            screens::network_manager::delete_selected(app);
+        }
         ConfirmAction::LaunchVm => {
             // Pop the confirm dialog first
             app.pop_screen();
@@ -524,6 +528,11 @@ fn render(app: &App, frame: &mut Frame) {
             render_dim_overlay(frame);
             screens::disk_passthrough::render(app, frame);
         }
+        Screen::NetworkManager => {
+            screens::main_menu::render(app, frame);
+            render_dim_overlay(frame);
+            screens::network_manager::render(app, frame);
+        }
     }
 }
 
@@ -579,6 +588,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         Screen::CreateWizard => screens::create_wizard::handle_key(app, key)?,
         Screen::PhysicalDiskPicker => screens::physical_disk_picker::handle_key(app, key)?,
         Screen::DiskPassthrough => screens::disk_passthrough::handle_key(app, key)?,
+        Screen::NetworkManager => screens::network_manager::handle_key(app, key)?,
         Screen::CreateWizardCustomOs => screens::create_wizard::handle_custom_os_key(app, key)?,
         Screen::CreateWizardDownload => screens::create_wizard::handle_download_key(app, key)?,
         Screen::NetworkSettings => screens::network_settings::handle_key(app, key)?,
@@ -629,6 +639,9 @@ fn handle_main_menu(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char('s') | KeyCode::Char('S') => {
             app.push_screen(Screen::Settings);
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            app.open_network_manager();
         }
         KeyCode::Char('x') | KeyCode::Char('X') => {
             if let Some(vm) = app.selected_vm().cloned() {
@@ -771,6 +784,8 @@ fn handle_management(app: &mut App, key: KeyEvent) -> Result<()> {
                             app.push_screen(Screen::SharedFolders);
                         }
                         MenuAction::NetworkSettings => {
+                            // Managed networks appear in the bridge picker (#53)
+                            app.reload_vnet_networks();
                             // Initialize network settings state from current VM config
                             if let Some(vm) = app.selected_vm() {
                                 let net = vm.config.network.as_ref();
@@ -1929,6 +1944,21 @@ fn render_confirm(app: &App, action: &ConfirmAction, frame: &mut Frame) {
             (
                 "Force Stop VM",
                 format!("Force stop {}? This may cause data loss.", name),
+            )
+        }
+        ConfirmAction::DeleteNetwork => {
+            let name = app
+                .vnet_networks
+                .get(app.vnet_selected)
+                .map(|n| n.describe())
+                .unwrap_or_else(|| "network".to_string());
+            (
+                "Delete Network",
+                format!(
+                    "Delete {}? Its definition and scripts are removed; \
+                     the host is not touched (the network is already stopped).",
+                    name
+                ),
             )
         }
         ConfirmAction::UsePhysicalDisk => {
