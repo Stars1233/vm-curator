@@ -4,6 +4,12 @@ A fast and friendly Rust TUI for managing desktop QEMU/KVM virtual machines — 
 
 ### Changelog
 
+**v1.4.0**
+- **Physical Disk Passthrough as Boot Device** (#80): Pass whole NVMe/SATA/USB disks straight through to guests — a new **Physical Disk** mode in the creation wizard (with a safety-filtered picker that excludes the host system disk, mounted disks, and LVM/swap members) and a **Passthrough Disks** management screen for existing VMs, with per-disk boot index; USB passthrough gains a boot-index option too. Also fixes a latent bug where Fedora's qcow2 OVMF firmware could be mistaken for the VM's disk — letting Reset VM delete it
+- **Virtual Network Manager** (#53): Create, edit, start/stop, and delete managed **NAT** or **Isolated** (host-only) networks from the new Networks screen (`n`), with configurable subnets and built-in DHCP — ideal for multi-VM labs. Host changes run only via inspectable generated `net-up.sh`/`net-down.sh` scripts with explicit sudo; managed networks appear in the per-VM bridge picker, and launching against a stopped network gives a clear error
+- **Homebrew Tap** (#77): `brew install mroboff/tap/vm-curator` — for atomic distros like Bluefin/Silverblue; the formula tracks releases automatically
+- **Fix Relative VM Library Paths** (#79): Entering a relative path (e.g. `VMs`) at setup made discovery cwd-dependent and broke launching entirely; paths are now anchored at home, and existing configs self-heal on load
+
 **v1.3.0**
 - **Configurable VM Window Size** (thanks @HenriqueCrj, #67): New Settings entry sets the initial display resolution for launched VMs (`WIDTHxHEIGHT`, e.g. `1440x900`) — applied at runtime via an environment variable on scripts using standard VGA, virtio-vga, virtio-vga-gl, or QXL video; existing scripts are patched automatically, and hand-customized video setups are left alone
 - **Fix Shared Folders with Spaces in Paths** (thanks @HenriqueCrj, #66): The managed `SHARED_FOLDERS_ARGS` section is now a properly quoted bash array, so host paths containing spaces or quotes no longer break the launch script
