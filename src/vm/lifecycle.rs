@@ -121,6 +121,33 @@ pub struct DiskPassthrough {
     pub bootindex: Option<u32>,
 }
 
+/// Fail fast when the VM uses a bridge network whose bridge does not exist.
+fn check_bridge_exists(vm: &DiscoveredVm) -> Result<(), String> {
+    use crate::vm::qemu_config::NetworkBackend;
+    let Some(network) = &vm.config.network else {
+        return Ok(());
+    };
+    let NetworkBackend::Bridge(bridge) = &network.backend else {
+        return Ok(());
+    };
+    if std::path::Path::new("/sys/class/net").join(bridge).exists() {
+        return Ok(());
+    }
+    if bridge.starts_with(crate::vnet::BRIDGE_PREFIX) {
+        Err(format!(
+            "Managed network bridge '{}' is not running.\n\
+             Start it from the Networks screen ([n] on the main menu) and try again.",
+            bridge
+        ))
+    } else {
+        Err(format!(
+            "Bridge '{}' does not exist on the host. Create it (or pick another \
+             network backend in Network Settings) and try again.",
+            bridge
+        ))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LaunchInvocation {
     program: String,
@@ -224,6 +251,17 @@ fn build_launch_invocation(
 /// If the process exits with an error within the monitoring window, we capture it.
 pub fn launch_vm_with_error_check(vm: &DiscoveredVm, options: &LaunchOptions) -> LaunchResult {
     let vm_name = vm.display_name();
+
+    // Preflight: a bridge backend needs its bridge to exist NOW, otherwise
+    // QEMU fails with a cryptic bridge-helper error. Managed networks
+    // (issue #53) get a pointer to the Networks screen.
+    if let Err(error) = check_bridge_exists(vm) {
+        return LaunchResult {
+            success: false,
+            error: Some(error),
+            vm_name,
+        };
+    }
 
     if let Err(e) = ensure_qmp_in_script(&vm.path) {
         log::warn!("launch_vm_with_error_check: could not patch QMP into launch.sh: {e}");
