@@ -151,7 +151,12 @@ fn handle_confirm_click(
     // The three-way unsaved-changes prompt has three buttons that don't map
     // onto this two-region click model; require the keyboard (s/d/Esc) and treat
     // any click as a cancel so a stray click never saves or discards.
-    if matches!(action, ConfirmAction::UnsavedChanges(_)) {
+    // The physical-disk confirmation is destructive for host data and requires
+    // an explicit 'y' keypress — a stray click must never confirm it.
+    if matches!(
+        action,
+        ConfirmAction::UnsavedChanges(_) | ConfirmAction::UsePhysicalDisk
+    ) {
         app.pop_screen();
         return Ok(());
     }
@@ -206,6 +211,11 @@ fn handle_confirm_click(
 /// Execute a confirmed action (extracted from handle_confirm for reuse)
 fn execute_confirm_action(app: &mut App, action: ConfirmAction) -> Result<()> {
     match action {
+        // Handled directly in handle_confirm (requires explicit 'y'); never
+        // reaches the generic y/Enter path.
+        ConfirmAction::UsePhysicalDisk => {
+            app.pop_screen();
+        }
         ConfirmAction::LaunchVm => {
             // Pop the confirm dialog first
             app.pop_screen();
@@ -504,6 +514,16 @@ fn render(app: &App, frame: &mut Frame) {
             render_dim_overlay(frame);
             screens::import_wizard::render(app, frame);
         }
+        Screen::PhysicalDiskPicker => {
+            screens::main_menu::render(app, frame);
+            render_dim_overlay(frame);
+            screens::physical_disk_picker::render(app, frame);
+        }
+        Screen::DiskPassthrough => {
+            screens::main_menu::render(app, frame);
+            render_dim_overlay(frame);
+            screens::disk_passthrough::render(app, frame);
+        }
     }
 }
 
@@ -557,6 +577,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         Screen::TextInput(context) => handle_text_input(app, context.clone(), key)?,
         Screen::ErrorDialog => handle_error_dialog(app, key)?,
         Screen::CreateWizard => screens::create_wizard::handle_key(app, key)?,
+        Screen::PhysicalDiskPicker => screens::physical_disk_picker::handle_key(app, key)?,
+        Screen::DiskPassthrough => screens::disk_passthrough::handle_key(app, key)?,
         Screen::CreateWizardCustomOs => screens::create_wizard::handle_custom_os_key(app, key)?,
         Screen::CreateWizardDownload => screens::create_wizard::handle_download_key(app, key)?,
         Screen::NetworkSettings => screens::network_settings::handle_key(app, key)?,
@@ -707,6 +729,12 @@ fn handle_management(app: &mut App, key: KeyEvent) -> Result<()> {
                             if let Some(vm) = app.selected_vm() {
                                 let saved = crate::vm::load_usb_passthrough(vm);
                                 app.selected_usb_devices.clear();
+                                app.usb_bootindexes = saved
+                                    .iter()
+                                    .filter_map(|d| {
+                                        d.bootindex.map(|b| ((d.vendor_id, d.product_id), b))
+                                    })
+                                    .collect();
                                 for saved_dev in &saved {
                                     // Find matching device by vendor/product ID
                                     for (i, dev) in app.usb_devices.iter().enumerate() {
@@ -729,6 +757,12 @@ fn handle_management(app: &mut App, key: KeyEvent) -> Result<()> {
                             app.snapshot_pci_baseline();
                             app.selected_menu_item = 0;
                             app.push_screen(Screen::PciPassthrough);
+                        }
+                        MenuAction::DiskPassthrough => {
+                            app.load_disk_passthrough();
+                            app.snapshot_disk_passthrough_baseline();
+                            app.selected_menu_item = 0;
+                            app.push_screen(Screen::DiskPassthrough);
                         }
                         MenuAction::SharedFolders => {
                             app.load_shared_folders();
@@ -1563,6 +1597,10 @@ fn save_usb_passthrough_config(app: &mut App) {
                 vendor_id: d.vendor_id,
                 product_id: d.product_id,
                 usb_version: d.usb_version,
+                bootindex: app
+                    .usb_bootindexes
+                    .get(&(d.vendor_id, d.product_id))
+                    .copied(),
             })
             .collect();
 
@@ -1647,6 +1685,28 @@ fn handle_usb_devices(app: &mut App, key: KeyEvent) -> Result<()> {
             // Enter to "confirm" a selection no longer toggles it back off (#52).
             app.toggle_usb_device(app.selected_menu_item);
         }
+        KeyCode::Char('b') | KeyCode::Char('B') => {
+            // Cycle firmware boot priority for the highlighted selected device:
+            // None -> 0 -> 1 -> 2 -> 3 -> None
+            if let Some(dev) = app.usb_devices.get(app.selected_menu_item) {
+                let key = (dev.vendor_id, dev.product_id);
+                if !app.selected_usb_devices.contains(&app.selected_menu_item) {
+                    app.set_status("Select the device first (Space), then set boot index");
+                } else {
+                    match app.usb_bootindexes.get(&key).copied() {
+                        None => {
+                            app.usb_bootindexes.insert(key, 0);
+                        }
+                        Some(n) if n < 3 => {
+                            app.usb_bootindexes.insert(key, n + 1);
+                        }
+                        Some(_) => {
+                            app.usb_bootindexes.remove(&key);
+                        }
+                    }
+                }
+            }
+        }
         KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter => {
             save_usb_passthrough_config(app);
         }
@@ -1707,6 +1767,17 @@ fn handle_confirm(app: &mut App, action: ConfirmAction, key: KeyEvent) -> Result
         return Ok(());
     }
 
+    // Destructive physical-disk confirmation: require an explicit 'y' — Enter
+    // must not confirm, so a double-press can't hand a host disk to a guest.
+    if action == ConfirmAction::UsePhysicalDisk {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Enter => app.pop_screen(),
+            KeyCode::Char('y') => screens::physical_disk_picker::apply_confirmed_selection(app),
+            _ => {}
+        }
+        return Ok(());
+    }
+
     match key.code {
         KeyCode::Esc | KeyCode::Char('n') => app.pop_screen(),
         KeyCode::Char('y') | KeyCode::Enter => {
@@ -1723,12 +1794,14 @@ fn confirm_save_and_exit(app: &mut App, kind: UnsavedKind) {
         UnsavedKind::Usb => save_usb_passthrough_config(app),
         UnsavedKind::Pci => screens::pci_passthrough::save_selection_and_report(app),
         UnsavedKind::SharedFolders => screens::shared_folders::save_selection_and_report(app),
+        UnsavedKind::DiskPassthrough => screens::disk_passthrough::save_selection_and_report(app),
     }
 
     let save_failed = match kind {
         UnsavedKind::Usb => app.usb_selection_dirty(),
         UnsavedKind::Pci => app.pci_selection_dirty(),
         UnsavedKind::SharedFolders => app.shared_folders_dirty(),
+        UnsavedKind::DiskPassthrough => app.disk_passthrough_dirty(),
     };
 
     app.pop_screen(); // close the confirm dialog
@@ -1743,7 +1816,7 @@ fn exit_management_screen(app: &mut App, kind: UnsavedKind) {
     match kind {
         UnsavedKind::Usb => app.selected_menu_item = 2,
         UnsavedKind::Pci => app.selected_menu_item = 0,
-        UnsavedKind::SharedFolders => {}
+        UnsavedKind::SharedFolders | UnsavedKind::DiskPassthrough => {}
     }
     app.pop_screen();
 }
@@ -1858,11 +1931,23 @@ fn render_confirm(app: &App, action: &ConfirmAction, frame: &mut Frame) {
                 format!("Force stop {}? This may cause data loss.", name),
             )
         }
+        ConfirmAction::UsePhysicalDisk => {
+            let message = screens::physical_disk_picker::confirm_message(app);
+            let mut dialog =
+                ConfirmDialog::new("⚠ DESTRUCTIVE: Pass Through Physical Disk", &message);
+            dialog.confirm_label = "Yes, use this disk (y)";
+            dialog.cancel_label = "Cancel (Esc)";
+            dialog.width = 72;
+            dialog.height = 14;
+            dialog.render(frame.area(), frame.buffer_mut());
+            return;
+        }
         ConfirmAction::UnsavedChanges(kind) => {
             let what = match kind {
                 UnsavedKind::Usb => "USB passthrough",
                 UnsavedKind::Pci => "PCI passthrough",
                 UnsavedKind::SharedFolders => "shared folder",
+                UnsavedKind::DiskPassthrough => "passthrough disk",
             };
             let message = format!("You have unsaved {} changes.", what);
             let mut dialog = ConfirmDialog::new("Unsaved Changes", &message);
@@ -1951,12 +2036,18 @@ fn render_usb_devices(app: &App, frame: &mut Frame) {
                     Style::default().fg(Color::White)
                 };
 
+                let bootindex = app
+                    .usb_bootindexes
+                    .get(&(device.vendor_id, device.product_id))
+                    .map(|b| format!("  [boot #{}]", b))
+                    .unwrap_or_default();
                 ListItem::new(format!(
-                    "{} {} ({:04x}:{:04x})",
+                    "{} {} ({:04x}:{:04x}){}",
                     checkbox,
                     device.display_name(),
                     device.vendor_id,
-                    device.product_id
+                    device.product_id,
+                    bootindex
                 ))
                 .style(style)
             })
@@ -1970,10 +2061,11 @@ fn render_usb_devices(app: &App, frame: &mut Frame) {
     }
 
     // Help text
-    let help =
-        Paragraph::new("[Space] Toggle  [Enter/s] Save  [u] Install USB permissions  [Esc] Back")
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center);
+    let help = Paragraph::new(
+        "[Space] Toggle  [b] Boot index  [Enter/s] Save  [u] Install USB permissions  [Esc] Back",
+    )
+    .style(Style::default().fg(Color::DarkGray))
+    .alignment(Alignment::Center);
     frame.render_widget(help, help_area);
 }
 

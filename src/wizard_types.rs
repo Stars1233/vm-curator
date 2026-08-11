@@ -329,6 +329,44 @@ pub enum WizardField {
     CustomOsShortBlurb,
 }
 
+/// Where the new VM's system disk comes from
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WizardDiskSource {
+    /// Create a fresh disk image in the VM directory
+    #[default]
+    NewImage,
+    /// Copy/move an existing disk image file into the VM directory
+    ExistingImage,
+    /// Pass through a whole physical disk (destructive for its contents)
+    PhysicalDevice,
+}
+
+impl WizardDiskSource {
+    pub fn next(self) -> Self {
+        match self {
+            Self::NewImage => Self::ExistingImage,
+            Self::ExistingImage => Self::PhysicalDevice,
+            Self::PhysicalDevice => Self::NewImage,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::NewImage => Self::PhysicalDevice,
+            Self::ExistingImage => Self::NewImage,
+            Self::PhysicalDevice => Self::ExistingImage,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NewImage => "Create New",
+            Self::ExistingImage => "Use Existing",
+            Self::PhysicalDevice => "Physical Disk",
+        }
+    }
+}
+
 /// State for the VM creation wizard
 #[derive(Debug, Clone)]
 pub struct CreateWizardState {
@@ -342,9 +380,10 @@ pub struct CreateWizardState {
     pub iso_downloading: bool,
     pub iso_download_progress: f32,
     pub disk_size_gb: u32,
-    pub use_existing_disk: bool,
+    pub disk_source: WizardDiskSource,
     pub existing_disk_path: Option<PathBuf>,
     pub existing_disk_action: DiskAction,
+    pub physical_disk: Option<crate::hardware::BlockDevice>,
     pub bios_rom_path: Option<PathBuf>,
     pub floppy_path: Option<PathBuf>,
     pub qemu_config: WizardQemuConfig,
@@ -376,9 +415,10 @@ impl Default for CreateWizardState {
             iso_downloading: false,
             iso_download_progress: 0.0,
             disk_size_gb: 32,
-            use_existing_disk: false,
+            disk_source: WizardDiskSource::default(),
             existing_disk_path: None,
             existing_disk_action: DiskAction::Copy,
+            physical_disk: None,
             bios_rom_path: None,
             floppy_path: None,
             qemu_config: WizardQemuConfig::default(),
@@ -451,21 +491,41 @@ impl CreateWizardState {
             }
             WizardStep::SelectIso => Ok(()),
             WizardStep::ConfigureDisk => {
-                if self.use_existing_disk {
-                    match &self.existing_disk_path {
+                match self.disk_source {
+                    WizardDiskSource::ExistingImage => match &self.existing_disk_path {
                         None => return Err("Please select an existing disk".to_string()),
                         Some(path) => {
                             if !path.exists() {
                                 return Err(format!("Disk file not found: {}", path.display()));
                             }
                         }
+                    },
+                    WizardDiskSource::NewImage => {
+                        if self.disk_size_gb == 0 {
+                            return Err("Disk size must be greater than 0".to_string());
+                        }
+                        if self.disk_size_gb > 10000 {
+                            return Err("Disk size cannot exceed 10TB".to_string());
+                        }
                     }
-                } else {
-                    if self.disk_size_gb == 0 {
-                        return Err("Disk size must be greater than 0".to_string());
-                    }
-                    if self.disk_size_gb > 10000 {
-                        return Err("Disk size cannot exceed 10TB".to_string());
+                    WizardDiskSource::PhysicalDevice => {
+                        let Some(disk) = &self.physical_disk else {
+                            return Err("Please select a physical disk".to_string());
+                        };
+                        if !disk.dev_path.exists() {
+                            return Err(format!(
+                                "Physical disk not found: {}",
+                                disk.dev_path.display()
+                            ));
+                        }
+                        // Physical passthrough targets x86 machine types only
+                        if let Some(machine) = &self.qemu_config.machine {
+                            if machine.starts_with("q800") || machine.starts_with("mac99") {
+                                return Err("Physical disk passthrough is not supported for this \
+                                     machine type"
+                                    .to_string());
+                            }
+                        }
                     }
                 }
                 Ok(())
